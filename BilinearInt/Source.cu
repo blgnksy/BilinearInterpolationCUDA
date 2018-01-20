@@ -1,40 +1,8 @@
 #include <iostream>
 #include <stdio.h>
 #include <windows.h>
-#include "cuda.h"
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-
-#define VC_EXTRALEAN
-#define WIN32_LEAN_AND_MEAN
-
-// CUDA error checking Macro.
-#define CUDA_CALL(x,y) {if((x) != cudaSuccess){ \
-  printf("CUDA error at %s:%d\n",__FILE__,__LINE__); \
-  printf("  %s\n", cudaGetErrorString(cudaGetLastError())); \
-  exit(EXIT_FAILURE);}\
-  else{printf("CUDA Success at %d. (%s)\n",__LINE__,y); }}
-
-double PCFreq = 0.0;
-__int64 CounterStart = 0;
-
-void StartCounter()
-{
-	LARGE_INTEGER li;
-	if (!QueryPerformanceFrequency(&li))
-		std::cout << "QueryPerformanceFrequency failed!\n";
-
-	PCFreq = double(li.QuadPart) / 1000.0;
-
-	QueryPerformanceCounter(&li);
-	CounterStart = li.QuadPart;
-}
-double GetCounter()
-{
-	LARGE_INTEGER li;
-	QueryPerformanceCounter(&li);
-	return double(li.QuadPart - CounterStart) / PCFreq;
-}
+#include "cuda_helper.h"
+#include "timer_helper.h"
 
 // Function Protypes.
 uint8_t *
@@ -57,7 +25,7 @@ int main()
 #pragma region Variable Declaritions
 	// Host parameter declarations.	
 	int   nWidth, nHeight, nMaxGray;
-	// Host parameter declaration.
+	// Device parameter declaration.
 	uint8_t* pDst_Dev = nullptr;
 #pragma endregion
 
@@ -68,7 +36,7 @@ int main()
 	auto pSrc_HostA = LoadPGM((char *)"./data/lena_beforeA.pgm", nWidth, nHeight, nMaxGray);
 #pragma endregion
 
-#pragma region Size Definitions
+#pragma region Size Parameter Definitions
 	int initial_width = nWidth;
 	int initial_height = nHeight;
 	int final_width = initial_width * 8;
@@ -148,9 +116,10 @@ int main()
 	//Device Output Memory Ops
 	CUDA_CALL(cudaMalloc(&pDst_Dev, total), "Memory Allocated for Device Output.");
 
-	StartCounter();
+	FastTimer ft;
+	ft.StartCounter();
 	InterpolateSum(d_img_texA, d_img_texB, d_img_texC, initial_width, initial_height, pDst_Dev, final_width, final_heigth);
-	std::cout << "Process finished in " << GetCounter() << " ms." << std::endl;
+	std::cout << "Process finished in " << ft.GetCounter() << " ms." << std::endl;
 
 	//Device Output Memory Ops
 	auto pDst_Host = new uint8_t[final_width * final_heigth];
