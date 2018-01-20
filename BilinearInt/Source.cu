@@ -1,8 +1,8 @@
 #include <iostream>
 #include <stdio.h>
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
 #include <windows.h>
+#include "cuda.h"
+#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
 #define VC_EXTRALEAN
@@ -63,9 +63,9 @@ int main()
 
 #pragma region Load image to the host
 	std::cout << "Loading PGM file." << std::endl;
-	auto pSrc_HostB = LoadPGM("./data/lena_beforeB.pgm", nWidth, nHeight, nMaxGray);
-	auto pSrc_HostC = LoadPGM("./data/lena_beforeC.pgm", nWidth, nHeight, nMaxGray);
-	auto pSrc_HostA = LoadPGM("./data/lena_beforeA.pgm", nWidth, nHeight, nMaxGray);
+	auto pSrc_HostB = LoadPGM((char *)"./data/lena_beforeB.pgm", nWidth, nHeight, nMaxGray);
+	auto pSrc_HostC = LoadPGM((char *)"./data/lena_beforeC.pgm", nWidth, nHeight, nMaxGray);
+	auto pSrc_HostA = LoadPGM((char *)"./data/lena_beforeA.pgm", nWidth, nHeight, nMaxGray);
 #pragma endregion
 
 #pragma region Size Definitions
@@ -75,10 +75,6 @@ int main()
 	int final_heigth = initial_height * 8;
 	size_t total = final_width*final_heigth;
 #pragma endregion
-
-	//Cuda Device Settings
-	cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
-	cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte);
 
 	//Channel Description
 	cudaChannelFormatDesc chandesc_img = cudaCreateChannelDesc(8, 0, 0, 0, cudaChannelFormatKindUnsigned);
@@ -162,7 +158,7 @@ int main()
 
 	// Output the result image.
 	std::cout << "Output the PGM file." << std::endl;
-	WritePGM("./output/lena_after.pgm", pDst_Host, final_width, final_heigth, nMaxGray);
+	WritePGM((char *)"./output/lena_after.pgm", pDst_Host, final_width, final_heigth, nMaxGray);
 
 	getchar();
 }
@@ -226,17 +222,16 @@ TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t 
 		if (x < neww) d_out[y*neww + x] += (resC * 0.33);
 	}
 #pragma endregion
-
 }
 
-void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const int initial_weight, const int initial_height, uint8_t* __restrict const d_out, const uint32_t neww, const uint32_t newh) {
-	const float gxsA = static_cast<float>(initial_weight) / static_cast<float>(neww);
-	const float gysA = static_cast<float>(initial_height) / static_cast<float>(newh);
-	const float gxsB = static_cast<float>(initial_weight/2) / static_cast<float>(neww);
-	const float gysB = static_cast<float>(initial_height/2) / static_cast<float>(newh);
-	const float gxsC = static_cast<float>(initial_weight/4) / static_cast<float>(neww);
-	const float gysC = static_cast<float>(initial_height/4) / static_cast<float>(newh);
-	TransformKernel << < {((neww - 1) >> 9) + 1, newh}, 256 >> > (d_img_texA, d_img_texB, d_img_texC, gxsA, gysA, gxsB, gysB, gxsC, gysC, d_out, neww);
+void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const int initial_width, const int initial_height, uint8_t* __restrict const d_out, const uint32_t final_width, const uint32_t final_height) {
+	const float gxsA = static_cast<float>(initial_width) / static_cast<float>(final_width);
+	const float gysA = static_cast<float>(initial_height) / static_cast<float>(final_height);
+	const float gxsB = static_cast<float>(initial_width / 2) / static_cast<float>(final_width);
+	const float gysB = static_cast<float>(initial_height / 2) / static_cast<float>(final_height);
+	const float gxsC = static_cast<float>(initial_width / 4) / static_cast<float>(final_width);
+	const float gysC = static_cast<float>(initial_height / 4) / static_cast<float>(final_height);
+	TransformKernel << < {((final_width - 1) >> 9) + 1, final_height}, 256 >> > (d_img_texA, d_img_texB, d_img_texC, gxsA, gysA, gxsB, gysB, gxsC, gysC, d_out, final_width);
 	cudaDeviceSynchronize();
 }
 
@@ -288,7 +283,7 @@ WritePGM(char *sFileName, uint8_t *pDst_Host, int nWidth, int nHeight, int nMaxG
 		perror("Cannot open file to read");
 		exit(EXIT_FAILURE);
 	}
-	char * aComment = "# Created by NPP";
+	char *aComment = (char *)"# Created by NPP";
 	fprintf(fOutput, "P5\n%s\n%d %d\n%d\n", aComment, nWidth, nHeight, nMaxGray);
 	for (int i = 0; i < nHeight; ++i)
 		for (int j = 0; j < nWidth; ++j)
