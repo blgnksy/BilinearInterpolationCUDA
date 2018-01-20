@@ -166,7 +166,7 @@ int main()
 
 	// Output the result image.
 	std::cout << "Output the PGM file." << std::endl;
-	WritePGM("./data/output/lena_after.pgm", pDst_Host, final_width, final_heigth, nMaxGray);
+	WritePGM("./output/lena_after.pgm", pDst_Host, final_width, final_heigth, nMaxGray);
 
 	getchar();
 }
@@ -245,7 +245,7 @@ uint8_t *
 LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 {
 	char aLine[256];
-	FILE * fInput = fopen(sFileName, "r");
+	FILE * fInput = fopen(sFileName, "rb");
 	if (fInput == 0)
 	{
 		perror("Cannot open file to read");
@@ -282,7 +282,7 @@ LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 void
 WritePGM(char *sFileName, uint8_t *pDst_Host, int nWidth, int nHeight, int nMaxGray)
 {
-	FILE * fOutput = fopen(sFileName, "w+");
+	FILE * fOutput = fopen(sFileName, "wb");
 	if (fOutput == 0)
 	{
 		perror("Cannot open file to read");
