@@ -8,7 +8,13 @@
 #include "npp.h"
 #include <math.h>
 #include <windows.h>
+#include <chrono>
+#include <cstdint>
+#include <algorithm>
+#include "device_launch_parameters.h"
 
+#define VC_EXTRALEAN
+#define WIN32_LEAN_AND_MEAN
 
 // CUDA error checking Macro.
 #define CUDA_CALL(x,y) {if((x) != cudaSuccess){ \
@@ -38,84 +44,99 @@ double GetCounter()
 	return double(li.QuadPart - CounterStart) / PCFreq;
 }
 
-//Global  declaration
-#define DIM 512
-
 // Function Protypes.
-Npp8u *
+unsigned int *
 LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray);
 
-void
-WritePGM(char * sFileName, Npp8u * pDst_Host, int nWidth, int nHeight, int nMaxGray);
+__global__ void
+TransformKernel(const cudaTextureObject_t d_img_tex, const float gxs, const float gys, uint8_t* __restrict const d_out, const int neww);
+
+void InterpolateSum(const cudaTextureObject_t d_img_tex, const int oldw, const int oldh, uint8_t* __restrict const d_out, const uint32_t neww, const uint32_t newh);
+
+int main()
+{
+
+	auto image = new uint8_t[4];
+	image[0] = 255;
+	image[1] = 255;
+	image[2] = 0;
+	image[3] = 0;
+
+	constexpr int oldw = 2;
+	constexpr int oldh = 2;
+	constexpr int neww = static_cast<int>(static_cast<double>(oldw) * 400.0);
+	constexpr int newh = static_cast<int>(static_cast<double>(oldh) * 1000.0);
+	const size_t total = static_cast<size_t>(neww)*static_cast<size_t>(newh);
+
+
+	cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+	cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte);
+
+	cudaChannelFormatDesc chandesc_img = cudaCreateChannelDesc(8, 0, 0, 0, cudaChannelFormatKindUnsigned);
+	cudaArray* d_img_arr;
+	CUDA_CALL(cudaMallocArray(&d_img_arr, &chandesc_img, oldw, oldh, cudaArrayTextureGather),"Memory Allocation.");
+	CUDA_CALL(cudaMemcpyToArray(d_img_arr, 0, 0, image, oldh * oldw, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
+	struct cudaResourceDesc resdesc_img;
+	memset(&resdesc_img, 0, sizeof(resdesc_img));
+	resdesc_img.resType = cudaResourceTypeArray;
+	resdesc_img.res.array.array = d_img_arr;
+	struct cudaTextureDesc texdesc_img;
+	memset(&texdesc_img, 0, sizeof(texdesc_img));
+	texdesc_img.addressMode[0] = cudaAddressModeClamp;
+	texdesc_img.addressMode[1] = cudaAddressModeClamp;
+	texdesc_img.readMode = cudaReadModeNormalizedFloat;
+	texdesc_img.filterMode = cudaFilterModePoint;
+	texdesc_img.normalizedCoords = 0;
+	cudaTextureObject_t d_img_tex = 0;
+	CUDA_CALL(cudaCreateTextureObject(&d_img_tex, &resdesc_img, &texdesc_img, nullptr),"Texture Object Created.");
+
+	uint8_t* d_out = nullptr;
+	CUDA_CALL(cudaMalloc(&d_out, total),"Memory Allocated.");
+	StartCounter();
+	InterpolateSum(d_img_tex, oldw, oldh, d_out, neww, newh);
+	std::cout << GetCounter() << std::endl;
+	auto h_out = new uint8_t[neww * newh];
+	CUDA_CALL(cudaMemcpy(h_out, d_out, total, cudaMemcpyDeviceToHost),"Memory Copied.");
+
+	std::cout << "Input stats: " << oldh << " rows, " << oldw << " cols." << std::endl;
+	std::cout << "Output stats: " << newh << " rows, " << neww << " cols." << std::endl;
+	getchar();
+}
 
 
 __global__ void
-TransformKernel(Npp8u * pDst_Dev, Npp8u * pSrc_Dev, const int nWidth);
+TransformKernel(const cudaTextureObject_t d_img_tex, const float gxs, const float gys, uint8_t* __restrict const d_out, const int neww) {
+	uint32_t x = (blockIdx.x << 9) + (threadIdx.x << 1);
+	const uint32_t y = blockIdx.y;
+	const float fy = (y + 0.5f)*gys - 0.5f;
+	const float wt_y = fy - floor(fy);
+	const float invwt_y = 1.0f - wt_y;
+#pragma unroll
+	for (int i = 0; i < 2; ++i, ++x) {
+		const float fx = (x + 0.5f)*gxs - 0.5f;
+		const float4 f = tex2Dgather<float4>(d_img_tex, fx + 0.5f, fy + 0.5f);
+		const float wt_x = fx - floor(fx);
+		const float invwt_x = 1.0f - wt_x;
+		const float xa = invwt_x*f.w + wt_x*f.z;
+		const float xb = invwt_x*f.x + wt_x*f.y;
+		const float res = 255.0f*(invwt_y*xa + wt_y*xb) + 0.5f;
+		// -----------------
+		if (x < neww) d_out[y*neww + x] = res;
+	}
+}
 
-
-
-
-// Main function.
-int
-main(int argc, char ** argv)
-{
-	// Host parameter declarations.	
-	Npp8u * pSrc_Host, *pDst_Host;
-	int   nWidth, nHeight, nMaxGray, nNormalizer;
-
-	std::cout << "GPU VERSION" << std::endl;
-
-	// Load image to the host.
-	std::cout << "Load PGM file." << std::endl;
-	pSrc_Host = LoadPGM("lena_before.pgm", nWidth, nHeight, nMaxGray);
-	pDst_Host = new Npp8u[nWidth * nHeight * 8];
-
-	// Device parameter declarations.
-	Npp8u	 * pSrc_Dev, *pDst_Dev;
-	int		 nSrcStep_Dev, nDstStep_Dev;
-
-	StartCounter();
-
-	// Allocate Device variables and copy the image from the host to GPU
-	pSrc_Dev = nppiMalloc_8u_C1(nWidth, nHeight, &nSrcStep_Dev);
-	pDst_Dev = nppiMalloc_8u_C1(nWidth, nHeight, &nDstStep_Dev);
-	std::cout << "Copy image from host to device." << std::endl;
-	CUDA_CALL(cudaMemcpy(pSrc_Dev, pSrc_Host, nWidth * nHeight * sizeof(Npp8u), cudaMemcpyHostToDevice), "Memory copied.(HostToDevice)");
-
-	std::cout << "Process the image on GPU." << std::endl;
-
-
-	dim3 dimGrid(512);
-	dim3 dimBlock(1024);
-
-	TransformKernel << <dimGrid, dimBlock, 0, 0 >> > (pDst_Dev, pSrc_Dev, nWidth);
-
-	// Copy result back to the host.
-	std::cout << "Work done! Copy the result back to host." << std::endl;
-	CUDA_CALL(cudaMemcpy(pDst_Host, pDst_Dev, nWidth * nHeight * sizeof(Npp8u), cudaMemcpyDeviceToHost), "Memory copied.(DeviceToHost)");
-
-	std::cout << "Time to calculate results(GPU Time): " << GetCounter() << std::endl;
-	// Output the result image.
-	std::cout << "Output the PGM file." << std::endl;
-	WritePGM("lena_after.pgm", pDst_Host, nWidth*4, nHeight, nMaxGray);
-
-	// Clean up.
-	std::cout << "Clean up." << std::endl;
-	delete[] pSrc_Host;
-	delete[] pDst_Host;
-
-	nppiFree(pSrc_Dev);
-	nppiFree(pDst_Dev);
-	printf("All done. Press Any Key to Continue...");
-	getchar();
-	return 0;
+void InterpolateSum(const cudaTextureObject_t d_img_tex, const int oldw, const int oldh, uint8_t* __restrict const d_out, const uint32_t neww, const uint32_t newh) {
+	const float gxs = static_cast<float>(oldw) / static_cast<float>(neww);
+	const float gys = static_cast<float>(oldh) / static_cast<float>(newh);
+	TransformKernel << <{((neww - 1) >> 9) + 1, newh}, 256 >> >(d_img_tex, gxs, gys, d_out, neww);
+	cudaDeviceSynchronize();
 }
 
 // Disable reporting warnings on functions that were marked with deprecated.
 #pragma warning( disable : 4996 )
 
 // Load PGM file.
-Npp8u *
+unsigned int *
 LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 {
 	char aLine[256];
@@ -142,7 +163,7 @@ LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 	std::cout << "\tMax value: " << nMaxGray << std::endl;
 	while (getc(fInput) != '\n');
 	// Following lines: data
-	Npp8u * pSrc_Host = new Npp8u[nWidth * nHeight];
+	unsigned int * pSrc_Host = new unsigned int[nWidth * nHeight];
 	for (int i = 0; i < nHeight; ++i)
 		for (int j = 0; j < nWidth; ++j)
 			pSrc_Host[i*nWidth + j] = fgetc(fInput);
@@ -151,41 +172,4 @@ LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 	return pSrc_Host;
 }
 
-// Write PGM image.
-void
-WritePGM(char * sFileName, Npp8u * pDst_Host, int nWidth, int nHeight, int nMaxGray)
-{
-	FILE * fOutput = fopen(sFileName, "w+");
-	if (fOutput == 0)
-	{
-		perror("Cannot open file to read");
-		exit(EXIT_FAILURE);
-	}
-	char * aComment = "# Created by NPP";
-	fprintf(fOutput, "P5\n%s\n%d %d\n%d\n", aComment, nWidth, nHeight, nMaxGray);
-	for (int i = 0; i < nHeight; ++i)
-		for (int j = 0; j < nWidth; ++j)
-			fputc(pDst_Host[i*nWidth + j], fOutput);
-	fclose(fOutput);
-}
-
-
-__global__ void
-TransformKernel(Npp8u * pDst_Dev, Npp8u * pSrc_Dev, const int nWitdh)
-{
-	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-	Npp8u d00 = pSrc_Dev[i];
-	Npp8u d01 = pSrc_Dev[i + 1];
-	Npp8u d10 = pSrc_Dev[i + nWitdh];
-	Npp8u d11 = pSrc_Dev[i + 1 + nWitdh];
-
-	pDst_Dev[i] = pSrc_Dev[i];
-	pDst_Dev[i + 1] = static_cast<Npp8u>(d00 / 1 + d01 / 7);
-	pDst_Dev[i + 2] = static_cast<Npp8u>(d00 / 2 + d01 / 6);
-	pDst_Dev[i + 3] = static_cast<Npp8u>(d00 / 3 + d01 / 5);
-	pDst_Dev[i + 4] = static_cast<Npp8u>(d00 / 4 + d01 / 4);
-	pDst_Dev[i + 5] = static_cast<Npp8u>(d00 / 5 + d01 / 3);
-	pDst_Dev[i + 6] = static_cast<Npp8u>(d00 / 6 + d01 / 2);
-	pDst_Dev[i + 7] = static_cast<Npp8u>(d00 / 7 + d01 / 1);
-}
 
