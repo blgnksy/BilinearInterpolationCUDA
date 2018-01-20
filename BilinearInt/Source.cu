@@ -45,8 +45,11 @@ double GetCounter()
 }
 
 // Function Protypes.
-unsigned int *
+uint8_t *
 LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray);
+
+void
+WritePGM(char * sFileName, uint8_t * pDst_Host, int nWidth, int nHeight, int nMaxGray);
 
 __global__ void
 TransformKernel(const cudaTextureObject_t d_img_tex, const float gxs, const float gys, uint8_t* __restrict const d_out, const int neww);
@@ -55,17 +58,18 @@ void InterpolateSum(const cudaTextureObject_t d_img_tex, const int oldw, const i
 
 int main()
 {
+	// Host parameter declarations.	
+	int   nWidth, nHeight, nMaxGray, nNormalizer;
 
-	auto image = new uint8_t[4];
-	image[0] = 255;
-	image[1] = 255;
-	image[2] = 0;
-	image[3] = 0;
+	// Load image to the host.
+	std::cout << "Loading PGM file." << std::endl;
+	auto pSrc_HostA = LoadPGM("lena_beforeB.pgm", nWidth, nHeight, nMaxGray);
 
-	constexpr int oldw = 2;
-	constexpr int oldh = 2;
-	constexpr int neww = static_cast<int>(static_cast<double>(oldw) * 400.0);
-	constexpr int newh = static_cast<int>(static_cast<double>(oldh) * 1000.0);
+
+	constexpr int oldw = 256;
+	constexpr int oldh = 256;
+	constexpr int neww = static_cast<int>(static_cast<double>(oldw) * 8);
+	constexpr int newh = static_cast<int>(static_cast<double>(oldh) * 8);
 	const size_t total = static_cast<size_t>(neww)*static_cast<size_t>(newh);
 
 
@@ -73,13 +77,17 @@ int main()
 	cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte);
 
 	cudaChannelFormatDesc chandesc_img = cudaCreateChannelDesc(8, 0, 0, 0, cudaChannelFormatKindUnsigned);
+
 	cudaArray* d_img_arr;
+
 	CUDA_CALL(cudaMallocArray(&d_img_arr, &chandesc_img, oldw, oldh, cudaArrayTextureGather),"Memory Allocation.");
-	CUDA_CALL(cudaMemcpyToArray(d_img_arr, 0, 0, image, oldh * oldw, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
+	CUDA_CALL(cudaMemcpyToArray(d_img_arr, 0, 0, pSrc_HostA, oldh * oldw, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
+
 	struct cudaResourceDesc resdesc_img;
 	memset(&resdesc_img, 0, sizeof(resdesc_img));
 	resdesc_img.resType = cudaResourceTypeArray;
 	resdesc_img.res.array.array = d_img_arr;
+
 	struct cudaTextureDesc texdesc_img;
 	memset(&texdesc_img, 0, sizeof(texdesc_img));
 	texdesc_img.addressMode[0] = cudaAddressModeClamp;
@@ -87,22 +95,27 @@ int main()
 	texdesc_img.readMode = cudaReadModeNormalizedFloat;
 	texdesc_img.filterMode = cudaFilterModePoint;
 	texdesc_img.normalizedCoords = 0;
+
 	cudaTextureObject_t d_img_tex = 0;
 	CUDA_CALL(cudaCreateTextureObject(&d_img_tex, &resdesc_img, &texdesc_img, nullptr),"Texture Object Created.");
 
-	uint8_t* d_out = nullptr;
-	CUDA_CALL(cudaMalloc(&d_out, total),"Memory Allocated.");
-	StartCounter();
-	InterpolateSum(d_img_tex, oldw, oldh, d_out, neww, newh);
-	std::cout << GetCounter() << std::endl;
-	auto h_out = new uint8_t[neww * newh];
-	CUDA_CALL(cudaMemcpy(h_out, d_out, total, cudaMemcpyDeviceToHost),"Memory Copied.");
+	uint8_t* pDst_Dev = nullptr;
+	CUDA_CALL(cudaMalloc(&pDst_Dev, total),"Memory Allocated.");
 
-	std::cout << "Input stats: " << oldh << " rows, " << oldw << " cols." << std::endl;
-	std::cout << "Output stats: " << newh << " rows, " << neww << " cols." << std::endl;
+	StartCounter();
+	InterpolateSum(d_img_tex, oldw, oldh, pDst_Dev, neww, newh);
+	std::cout << "Process finished in " << GetCounter() << std::endl;
+
+	auto pDst_Host = new uint8_t[neww * newh];
+	CUDA_CALL(cudaMemcpy(pDst_Host, pDst_Dev, total, cudaMemcpyDeviceToHost),"Memory Copied.");
+
+	// Output the result image.
+	std::cout << "Output the PGM file." << std::endl;
+	WritePGM("lena_after.pgm", pDst_Host, neww, newh, nMaxGray);
+
+
 	getchar();
 }
-
 
 __global__ void
 TransformKernel(const cudaTextureObject_t d_img_tex, const float gxs, const float gys, uint8_t* __restrict const d_out, const int neww) {
@@ -120,7 +133,6 @@ TransformKernel(const cudaTextureObject_t d_img_tex, const float gxs, const floa
 		const float xa = invwt_x*f.w + wt_x*f.z;
 		const float xb = invwt_x*f.x + wt_x*f.y;
 		const float res = 255.0f*(invwt_y*xa + wt_y*xb) + 0.5f;
-		// -----------------
 		if (x < neww) d_out[y*neww + x] = res;
 	}
 }
@@ -136,7 +148,7 @@ void InterpolateSum(const cudaTextureObject_t d_img_tex, const int oldw, const i
 #pragma warning( disable : 4996 )
 
 // Load PGM file.
-unsigned int *
+uint8_t *
 LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 {
 	char aLine[256];
@@ -163,7 +175,7 @@ LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 	std::cout << "\tMax value: " << nMaxGray << std::endl;
 	while (getc(fInput) != '\n');
 	// Following lines: data
-	unsigned int * pSrc_Host = new unsigned int[nWidth * nHeight];
+	uint8_t *pSrc_Host = new uint8_t[nWidth * nHeight];
 	for (int i = 0; i < nHeight; ++i)
 		for (int j = 0; j < nWidth; ++j)
 			pSrc_Host[i*nWidth + j] = fgetc(fInput);
@@ -173,3 +185,20 @@ LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
 }
 
 
+// Write PGM image.
+void
+WritePGM(char *sFileName, uint8_t *pDst_Host, int nWidth, int nHeight, int nMaxGray)
+{
+	FILE * fOutput = fopen(sFileName, "w+");
+	if (fOutput == 0)
+	{
+		perror("Cannot open file to read");
+		exit(EXIT_FAILURE);
+	}
+	char * aComment = "# Created by NPP";
+	fprintf(fOutput, "P5\n%s\n%d %d\n%d\n", aComment, nWidth, nHeight, nMaxGray);
+	for (int i = 0; i < nHeight; ++i)
+		for (int j = 0; j < nWidth; ++j)
+			fputc(pDst_Host[i*nWidth + j], fOutput);
+	fclose(fOutput);
+}
