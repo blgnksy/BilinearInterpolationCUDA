@@ -44,7 +44,11 @@ void
 WritePGM(char * sFileName, uint8_t * pDst_Host, int nWidth, int nHeight, int nMaxGray);
 
 __global__ void
-TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const float gxs, const float gys, uint8_t* __restrict const d_out, const int neww);
+TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, 
+				const float gxs, const float gys, 
+				const float gxsB, const float gysB,
+				const float gxsC, const float gysC, 
+				uint8_t* __restrict const d_out, const int neww);
 
 void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const int oldw, const int oldh, uint8_t* __restrict const d_out, const uint32_t neww, const uint32_t newh);
 
@@ -52,34 +56,24 @@ int main()
 {
 #pragma region Variable Declaritions
 	// Host parameter declarations.	
-	int   nWidthA, nHeightA, nWidthB, nHeightB, nWidthC, nHeightC, nMaxGray;
+	int   nWidth, nHeight, nMaxGray;
 	// Host parameter declaration.
 	uint8_t* pDst_Dev = nullptr;
 #pragma endregion
 
 #pragma region Load image to the host
 	std::cout << "Loading PGM file." << std::endl;
-	auto pSrc_HostB = LoadPGM("./data/lena_beforeB.pgm", nWidthB, nHeightB, nMaxGray);
-	auto pSrc_HostC = LoadPGM("./data/lena_beforeC.pgm", nWidthC, nHeightC, nMaxGray);
-	auto pSrc_HostA = LoadPGM("./data/lena_beforeA.pgm", nWidthA, nHeightA, nMaxGray);
+	auto pSrc_HostB = LoadPGM("./data/lena_beforeB.pgm", nWidth, nHeight, nMaxGray);
+	auto pSrc_HostC = LoadPGM("./data/lena_beforeC.pgm", nWidth, nHeight, nMaxGray);
+	auto pSrc_HostA = LoadPGM("./data/lena_beforeA.pgm", nWidth, nHeight, nMaxGray);
 #pragma endregion
 
 #pragma region Size Definitions
-	int initial_widthA = nWidthA;
-	int initial_heightA = nHeightA;
-	int final_widthA = initial_widthA * 8;
-	int final_heigthA = initial_heightA * 8;
-
-	int initial_widthB = nWidthB;
-	int initial_heightB = nHeightB;
-	int final_widthB = initial_widthB * 16;
-	int final_heigthB= initial_heightB * 16;
-
-	int initial_widthC = nWidthC;
-	int initial_heightC = nHeightC;
-	int final_widthC = initial_widthC * 32;
-	int final_heigtAC = initial_heightC * 32;
-	size_t total = final_widthA*final_heigthA;
+	int initial_width = nWidth;
+	int initial_height = nHeight;
+	int final_width = initial_width * 8;
+	int final_heigth = initial_height * 8;
+	size_t total = final_width*final_heigth;
 #pragma endregion
 
 	//Cuda Device Settings
@@ -91,8 +85,8 @@ int main()
 
 #pragma region Array-Resource-Texture For Image A 
 	cudaArray* d_img_arrA;
-	CUDA_CALL(cudaMallocArray(&d_img_arrA, &chandesc_img, initial_widthA, initial_heightA, cudaArrayTextureGather), "Memory Allocation.");
-	CUDA_CALL(cudaMemcpyToArray(d_img_arrA, 0, 0, pSrc_HostA, initial_widthA * initial_heightA, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
+	CUDA_CALL(cudaMallocArray(&d_img_arrA, &chandesc_img, initial_width, initial_height, cudaArrayTextureGather), "Memory Allocation.");
+	CUDA_CALL(cudaMemcpyToArray(d_img_arrA, 0, 0, pSrc_HostA, initial_width * initial_height, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
 
 	struct cudaResourceDesc resdesc_imgA;
 	memset(&resdesc_imgA, 0, sizeof(resdesc_imgA));
@@ -113,8 +107,8 @@ int main()
 
 #pragma region Array-Resource-Texture For Image B
 	cudaArray* d_img_arrB;
-	CUDA_CALL(cudaMallocArray(&d_img_arrB, &chandesc_img, initial_widthB, initial_heightB, cudaArrayTextureGather), "Memory Allocation.");
-	CUDA_CALL(cudaMemcpyToArray(d_img_arrB, 0, 0, pSrc_HostB, initial_widthB * initial_heightB, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
+	CUDA_CALL(cudaMallocArray(&d_img_arrB, &chandesc_img, initial_width/2, initial_height/2, cudaArrayTextureGather), "Memory Allocation.");
+	CUDA_CALL(cudaMemcpyToArray(d_img_arrB, 0, 0, pSrc_HostB, initial_width * initial_height / 4, cudaMemcpyHostToDevice), "Memory Cpoied to Array.");
 
 	struct cudaResourceDesc resdesc_imgB;
 	memset(&resdesc_imgB, 0, sizeof(resdesc_imgB));
@@ -135,8 +129,8 @@ int main()
 
 #pragma region Array-Resource-Texture For Image C
 	cudaArray* d_img_arrC;
-	CUDA_CALL(cudaMallocArray(&d_img_arrC, &chandesc_img, initial_widthC, initial_heightC, cudaArrayTextureGather), "Memory Allocation.");
-	CUDA_CALL(cudaMemcpyToArray(d_img_arrC, 0, 0, pSrc_HostC, initial_widthC * initial_heightC , cudaMemcpyHostToDevice), "Memory Copied to Array.");
+	CUDA_CALL(cudaMallocArray(&d_img_arrC, &chandesc_img, initial_width/4, initial_height/4, cudaArrayTextureGather), "Memory Allocation.");
+	CUDA_CALL(cudaMemcpyToArray(d_img_arrC, 0, 0, pSrc_HostC, initial_width * initial_height / 16, cudaMemcpyHostToDevice), "Memory Copied to Array.");
 
 	struct cudaResourceDesc resdesc_imgC;
 	memset(&resdesc_imgC, 0, sizeof(resdesc_imgC));
@@ -159,7 +153,7 @@ int main()
 	CUDA_CALL(cudaMalloc(&pDst_Dev, total), "Memory Allocated for Device Output.");
 
 	StartCounter();
-	InterpolateSum(d_img_texA, d_img_texB, d_img_texC, initial_widthA, initial_heightA, initial_widthB, initial_heightB, initial_widthC, initial_heightC, pDst_Dev, final_width, final_heigth);
+	InterpolateSum(d_img_texA, d_img_texB, d_img_texC, initial_width, initial_height, pDst_Dev, final_width, final_heigth);
 	std::cout << "Process finished in " << GetCounter() << " ms." << std::endl;
 
 	//Device Output Memory Ops
@@ -174,7 +168,11 @@ int main()
 }
 //  Adopted from https://github.com/komrad36/CUDALERP
 __global__ void
-TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const float gxsA, const float gysA, uint8_t* __restrict const d_out, const int neww) {
+TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, 
+				const float gxsA, const float gysA, 
+				const float gxsB, const float gysB,
+				const float gxsC, const float gysC,
+				uint8_t* __restrict const d_out, const int neww) {
 	uint32_t x = (blockIdx.x << 9) + (threadIdx.x << 1);
 	const uint32_t y = blockIdx.y;
 
@@ -192,13 +190,10 @@ TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t 
 		const float xaA = invwt_xA*fA.w + wt_xA*fA.z;
 		const float xbA = invwt_xA*fA.x + wt_xA*fA.y;
 		const float resA = 255.0f*(invwt_yA*xaA + wt_yA*xbA) + 0.5f;
-		if (x < neww) d_out[y*neww + x] = (resA);// *0.34);
+		if (x < neww) d_out[y*neww + x] = (resA *0.34);
 	}
 #pragma endregion
-
 #pragma region Bilinear Interpolation of Image B
-	const float gysB = gysA / 2;
-	const float gxsB = gxsA / 2;
 	const float fyB = (y + 0.5f)*gysB - 0.5f;
 	const float wt_yB = fyB - floor(fyB);
 	const float invwt_yB = 1.0f - wt_yB;
@@ -211,13 +206,11 @@ TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t 
 		const float xaB = invwt_xB*fB.w + wt_xB*fB.z;
 		const float xbB = invwt_xB*fB.x + wt_xB*fB.y;
 		const float resB = 255.0f*(invwt_yB*xaB + wt_yB*xbB) + 0.5f;
-		//if (x < neww) d_out[y*neww + x] += (resB * 0.33);
+		if (x < neww) d_out[y*neww + x] += (resB * 0.33);
 	}
 #pragma endregion
 
 #pragma region Bilinear Interpolation of Image C
-	const float gysC = gysA / 4;
-	const float gxsC = gxsA / 4;
 	const float fyC = (y + 0.5f)*gysC - 0.5f;
 	const float wt_yC = fyC - floor(fyC);
 	const float invwt_yC = 1.0f - wt_yC;
@@ -230,20 +223,20 @@ TransformKernel(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t 
 		const float xaC = invwt_xC*fC.w + wt_xC*fC.z;
 		const float xbC = invwt_xC*fC.x + wt_xC*fC.y;
 		const float resC = 255.0f*(invwt_yC*xaC + wt_yC*xbC) + 0.5f;
-		//if (x < neww) d_out[y*neww + x] += (resC * 0.33);
+		if (x < neww) d_out[y*neww + x] += (resC * 0.33);
 	}
 #pragma endregion
 
 }
 
-void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, 
-					const int initial_widthA, const int initial_heightA, 
-					const int initial_widthB, const int initial_heightB, 
-					const int initial_widthC, const int initial_heightC, 
-					uint8_t* __restrict const d_out, const uint32_t final_width, const uint32_t newh) {
-	const float gxs = static_cast<float>(initial_widthA) / static_cast<float>(neww);
-	const float gys = static_cast<float>(initial_heightA) / static_cast<float>(newh);
-	TransformKernel << < {((neww - 1) >> 9) + 1, newh}, 256 >> > (d_img_texA, d_img_texB, d_img_texC, gxs, gys, d_out, neww);
+void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObject_t d_img_texB, const cudaTextureObject_t d_img_texC, const int initial_weight, const int initial_height, uint8_t* __restrict const d_out, const uint32_t neww, const uint32_t newh) {
+	const float gxsA = static_cast<float>(initial_weight) / static_cast<float>(neww);
+	const float gysA = static_cast<float>(initial_height) / static_cast<float>(newh);
+	const float gxsB = static_cast<float>(initial_weight/2) / static_cast<float>(neww);
+	const float gysB = static_cast<float>(initial_height/2) / static_cast<float>(newh);
+	const float gxsC = static_cast<float>(initial_weight/4) / static_cast<float>(neww);
+	const float gysC = static_cast<float>(initial_height/4) / static_cast<float>(newh);
+	TransformKernel << < {((neww - 1) >> 9) + 1, newh}, 256 >> > (d_img_texA, d_img_texB, d_img_texC, gxsA, gysA, gxsB, gysB, gxsC, gysC, d_out, neww);
 	cudaDeviceSynchronize();
 }
 
