@@ -1,8 +1,9 @@
-#include <iostream>
+
 #include <stdio.h>
 #include <windows.h>
 #include "cuda_helper.h"
 #include "timer_helper.h"
+#include "pgm_helper.h"
 
 // Function Protypes.
 uint8_t *
@@ -116,7 +117,7 @@ int main()
 	//Device Output Memory Ops
 	CUDA_CALL(cudaMalloc(&pDst_Dev, total), "Memory Allocated for Device Output.");
 
-	FastTimer ft;
+	FastTimer ft; //Timer 
 	ft.StartCounter();
 	InterpolateSum(d_img_texA, d_img_texB, d_img_texC, initial_width, initial_height, pDst_Dev, final_width, final_heigth);
 	std::cout << "Process finished in " << ft.GetCounter() << " ms." << std::endl;
@@ -202,60 +203,4 @@ void InterpolateSum(const cudaTextureObject_t d_img_texA, const cudaTextureObjec
 	const float gysC = static_cast<float>(initial_height / 4) / static_cast<float>(final_height);
 	TransformKernel << < {((final_width - 1) >> 9) + 1, final_height}, 256 >> > (d_img_texA, d_img_texB, d_img_texC, gxsA, gysA, gxsB, gysB, gxsC, gysC, d_out, final_width);
 	cudaDeviceSynchronize();
-}
-
-// Load PGM file.
-uint8_t *
-LoadPGM(char * sFileName, int & nWidth, int & nHeight, int & nMaxGray)
-{
-	char aLine[256];
-	FILE * fInput = fopen(sFileName, "rb");
-	if (fInput == 0)
-	{
-		perror("Cannot open file to read");
-		exit(EXIT_FAILURE);
-	}
-	// First line: version
-	fgets(aLine, 256, fInput);
-	std::cout << "\tVersion: " << aLine;
-	// Second line: comment
-	fgets(aLine, 256, fInput);
-	std::cout << "\tComment: " << aLine;
-	fseek(fInput, -1, SEEK_CUR);
-	// Third line: size
-	fscanf(fInput, "%d", &nWidth);
-	std::cout << "\tWidth: " << nWidth;
-	fscanf(fInput, "%d", &nHeight);
-	std::cout << " Height: " << nHeight << std::endl;
-	// Fourth line: max value
-	fscanf(fInput, "%d", &nMaxGray);
-	std::cout << "\tMax value: " << nMaxGray << std::endl;
-	while (getc(fInput) != '\n');
-	// Following lines: data
-	uint8_t *pSrc_Host = new uint8_t[nWidth * nHeight];
-	for (int i = 0; i < nHeight; ++i)
-		for (int j = 0; j < nWidth; ++j)
-			pSrc_Host[i*nWidth + j] = fgetc(fInput);
-	fclose(fInput);
-
-	return pSrc_Host;
-}
-
-
-// Write PGM image.
-void
-WritePGM(char *sFileName, uint8_t *pDst_Host, int nWidth, int nHeight, int nMaxGray)
-{
-	FILE * fOutput = fopen(sFileName, "wb");
-	if (fOutput == 0)
-	{
-		perror("Cannot open file to read");
-		exit(EXIT_FAILURE);
-	}
-	char *aComment = (char *)"# Created by NPP";
-	fprintf(fOutput, "P5\n%s\n%d %d\n%d\n", aComment, nWidth, nHeight, nMaxGray);
-	for (int i = 0; i < nHeight; ++i)
-		for (int j = 0; j < nWidth; ++j)
-			fputc(pDst_Host[i*nWidth + j], fOutput);
-	fclose(fOutput);
 }
